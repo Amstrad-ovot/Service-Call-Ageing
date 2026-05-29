@@ -11,7 +11,6 @@ import gspread
 from src.utils import connect_gsheet, show_popup
 
 
-
 # ─────────────────────────────────────────────
 # STATUS COLUMNS
 # ─────────────────────────────────────────────
@@ -30,7 +29,6 @@ STATUS_COLS = [
 # ─────────────────────────────────────────────
 
 def save_working_data(data: pd.DataFrame) -> bool:
-
     if data.empty:
         show_popup("No data to save — DataFrame is empty.", type="warning")
         return False
@@ -98,7 +96,6 @@ def prepare_data(open_call_data: pd.DataFrame,
         data["phone1"] = "'" + data["phone1"].fillna("").astype(str)
         data["provider_phone1"] = "'" + data["provider_phone1"].fillna("").astype(str)
 
-
         present_date_cols = [c for c in STATUS_COLS if c in data.columns]
         for col in present_date_cols:
             data[col] = pd.to_datetime(data[col], errors="coerce").dt.normalize()
@@ -119,6 +116,7 @@ def prepare_data(open_call_data: pd.DataFrame,
         print(f"Error in prepare_data: {e}")
         return pd.DataFrame()
 
+
 def calculate_ageing(data: pd.DataFrame,
                      from_status: str = "call_date",
                      to_status: str = "complete_date") -> pd.DataFrame:
@@ -128,22 +126,39 @@ def calculate_ageing(data: pd.DataFrame,
         return data
 
     try:
-        # 1. Consecutive-status ageing
-        for col1, col2 in zip(STATUS_COLS[1:], STATUS_COLS[2:]):
-            if col1 in data.columns and col2 in data.columns:
-                data[f"age_betn_{col1}_and_{col2}"] = (
-                    data[col2] - data[col1]
-                ).dt.days.abs()
+        # Define the exact pairs you requested mapped to the lowercased dataframe column names
+        custom_pairs = [
+            ("call_date", "work_allocated"),
+            ("work_allocated", "part_pending"),
+            ("part_pending", "part_delivered"),
+            ("part_delivered", "complete_date"),             # Mapped 'completed' to your defined 'complete_date'
+            ("work_allocated", "to_be_rejected"),            # Mapped 'TBR' to 'to_be_rejected'
+            ("part_pending", "part_declared_not_available"), # Mapped 'PDNA' to 'part_declared_not_available'
+            ("part_not_available_in_stores", "part_declared_not_available"), # Mapped 'PNAIS' to 'part_not_available_in_stores'
+            ("part_pending", "sit_wh_to_asp"),
+            ("sit_wh_to_asp", "part_delivered"),
+            ("ran_c_proposed", "ran_c_approved"),
+            ("ran_c_proposed", "ran_c_reapply"),
+            ("ran_c_reapply", "ran_c_approved")
+        ]
 
-        # 2. Custom (user-selected) ageing
+        # 1. Process specific requested custom pairs
+        for start_col, end_col in custom_pairs:
+            if start_col in data.columns and end_col in data.columns:
+                col_name = f"age_betn_{start_col}_and_{end_col}"
+                data[col_name] = (data[end_col] - data[start_col]).dt.days.abs()
+            else:
+                missing = [c for c in (start_col, end_col) if c not in data.columns]
+                print(f"Skipping pair: columns {missing} not found in DataFrame.")
+
+        # 2. Backwards compatibility custom (user-selected execution argument)
         if from_status in data.columns and to_status in data.columns:
             data[f"age_betn_{from_status}_and_{to_status}"] = (
                 data[to_status] - data[from_status]
             ).dt.days.abs()
         else:
-            missing = [c for c in (from_status, to_status) if c not in data.columns]
-            print(f"calculate_ageing: columns not found → {missing}")
-            data[f"age_{from_status}_to_{to_status}"] = None
+            missing_args = [c for c in (from_status, to_status) if c not in data.columns]
+            print(f"calculate_ageing argument columns not found → {missing_args}")
 
         return data
 
@@ -160,4 +175,3 @@ def func1(open_call_data: pd.DataFrame,
     data = prepare_data(open_call_data, completed_call_data)
     # data = calculate_ageing(data, from_status=from_status, to_status=to_status)
     return data
-
