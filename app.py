@@ -250,7 +250,6 @@ elif page == "calculate_ageing":
         result_display = result_df[base_cols + all_age_cols]
         result_display['service_id'] = result_display['service_id'].apply(lambda x: f"{x:.0f}")
 
-
         # ── Persist result in session_state so reruns don't wipe it ──────
         st.session_state["ageing_result"]      = result_display
         st.session_state["ageing_result_cols"] = all_age_cols
