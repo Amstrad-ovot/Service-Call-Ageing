@@ -1,5 +1,7 @@
+import io
 import streamlit as st
 import pandas as pd
+import xlsxwriter
 from datetime import datetime
 
 from main import func1, calculate_ageing, STATUS_COLS
@@ -66,7 +68,133 @@ def save_ageing_result(data: pd.DataFrame) -> bool:
         print(f"Error in save_ageing_result: {e}")
         show_popup(f"Failed to save ageing result: {e}", type="error")
         return False
-    
+
+
+# ─────────────────────────────────────────────
+# Helpers — formatting the downloadable export
+# ─────────────────────────────────────────────
+
+# Map of long status-column tokens (as they appear inside an
+# "<from>_&_<to>" / "age_betn_<from>_&_<to>" column name) to their short codes.
+AGEING_COL_ABBREV = {
+    "work_allocated":               "WA",
+    "part_pending":                  "PP",
+    "part_delivered":                "PD",
+    "to_be_rejected":                "TBR",
+    "part_declared_not_available":   "PDNA",
+    "part_not_available_in_stores":  "PNAIS",
+    "sit_wh_to_asp":                 "SIT_WH2ASP",
+    "ran_c_proposed":                "RAN_C_PROP",
+    "ran_c_approved":                "RAN_C_APPR",
+    "ran_c_reapply":                 "RAN_C_REAPP",
+    "sit_masp_to_se":                "SIT_MASP2SE",
+    "ran_d_proposed":                "RAN_D_PROP",
+    "ran_d_approved":                "RAN_D_APPR",
+    "work_in_progress": "WIP",
+    "call_date" : "REG_DT",
+    "complete_date" : "COMP_DT",
+}
+
+
+def format_export_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Return a copy of ``df`` with shortened ageing-column names and
+    every column name converted to UPPERCASE.
+
+    Long tokens inside ``<from>_&_<to>`` columns are replaced with
+    their abbreviation from ``AGEING_COL_ABBREV`` (longest tokens are
+    matched first so e.g. ``ran_c_reapply`` isn't partially matched by
+    a shorter token first).
+    """
+    export_df = df.copy()
+
+    # Match longer tokens first to avoid partial/overlapping replacements.
+    ordered_tokens = sorted(AGEING_COL_ABBREV, key=len, reverse=True)
+
+    new_columns = []
+    for col in export_df.columns:
+        new_col = col
+        if "_&_" in new_col:
+            for token in ordered_tokens:
+                if token in new_col:
+                    new_col = new_col.replace(token, AGEING_COL_ABBREV[token])
+        new_columns.append(new_col.upper())
+
+    export_df.columns = new_columns
+    return export_df
+
+
+def create_styled_excel(df: pd.DataFrame, sheet_name: str = "Ageing Result") -> bytes:
+    """
+    Build an in-memory .xlsx file from ``df`` with:
+      - bold, coloured, centred header row
+      - thin borders around every cell (header + data)
+      - auto-sized columns
+      - blank cells (instead of #NUM!) wherever a value is NaN
+      - date columns kept as plain dates (not Excel's default datetime format)
+
+    Returns the raw bytes, ready for ``st.download_button``.
+    """
+
+    output = io.BytesIO()
+    workbook  = xlsxwriter.Workbook(output, {"in_memory": True})
+    worksheet = workbook.add_worksheet(sheet_name)
+
+    header_format = workbook.add_format({
+        "bold": True,
+        "bg_color": "#4472C4",
+        "font_color": "#FFFFFF",
+        "border": 1,
+        "align": "center",
+        "valign": "vcenter",
+        "text_wrap": True,
+    })
+
+    cell_format = workbook.add_format({
+        "border": 1,
+        "valign": "vcenter",
+    })
+
+    date_cell_format = workbook.add_format({
+        "border": 1,
+        "valign": "vcenter",
+        # "num_format": "dd-mmm-yyyy",
+        "num_format": "yyyy-mm-dd",
+    })
+
+    # Header row
+    for col_num, col_name in enumerate(df.columns):
+        worksheet.write(0, col_num, col_name, header_format)
+
+    # Data rows — write NaN/None as a blank (bordered) cell, not #NUM!,
+    # and write datetime values with a plain date format (not Excel's default).
+    for col_num, col_name in enumerate(df.columns):
+        for row_num in range(len(df)):
+            value = df.iat[row_num, col_num]
+            if pd.isna(value):
+                worksheet.write_blank(row_num + 1, col_num, None, cell_format)
+            elif isinstance(value, (pd.Timestamp, datetime)):
+                worksheet.write_datetime(row_num + 1, col_num, value, date_cell_format)
+            else:
+                worksheet.write(row_num + 1, col_num, value, cell_format)
+
+    # Auto-size columns
+    for col_num, col_name in enumerate(df.columns):
+        if not df.empty:
+            max_data_len = df[col_name].map(
+                lambda x: len(str(x)) if pd.notna(x) else 0
+            ).max()
+        else:
+            max_data_len = 0
+        col_width = max(max_data_len, len(str(col_name))) + 2
+        worksheet.set_column(col_num, col_num, col_width)
+
+    worksheet.set_row(0, 30)  # give header row a bit more height
+
+    workbook.close()
+    return output.getvalue()
+
+
 # ═════════════════════════════════════════════
 # PAGE — Upload & Create Report
 # ═════════════════════════════════════════════
@@ -233,7 +361,8 @@ elif page == "calculate_ageing":
                 to_status=st.session_state["ageing_pairs"][0]["to"],
             )
             for pair in st.session_state["ageing_pairs"][1:]:
-                col_name = f"age_betn_{pair['from']}_and_{pair['to']}"
+                # col_name = f"age_betn_{pair['from']}_&_{pair['to']}"
+                col_name = f"{pair['from']}_&_{pair['to']}"
                 if col_name not in result_df.columns:
                     result_df = calculate_ageing(
                         result_df,
@@ -243,10 +372,10 @@ elif page == "calculate_ageing":
 
         DISPLAY_COLS = [
             "service_id", "customer_name", "phone1", "circle", "city",
-            "company_name", "provider_phone1", "call_date", "status_code",
+            "company_name", "provider_phone1", "call_date", "updatedate","status_code",
         ]
         base_cols    = [c for c in DISPLAY_COLS if c in result_df.columns]
-        all_age_cols = [c for c in result_df.columns if c.startswith("age_betn_")]
+        all_age_cols = [c for c in result_df.columns if "_&_" in c]
         result_display = result_df[base_cols + all_age_cols]
         result_display['service_id'] = result_display['service_id'].apply(lambda x: f"{x:.0f}")
 
@@ -275,14 +404,17 @@ elif page == "calculate_ageing":
             m2.metric("Avg Ageing (days)", f"{result_display[all_age_cols[0]].mean():.1f}")
             m3.metric("Max Ageing (days)", f"{result_display[all_age_cols[0]].max():.0f}")
 
-        # st.dataframe(result_display, use_container_width=True)
-        
-        csv = result_display.to_csv(index=False).encode("utf-8")
+        # Apply the export formatting (shortened ageing-column names + uppercase)
+        export_df = format_export_columns(result_display)
+
+        excel_bytes = create_styled_excel(export_df)
 
         st.download_button(
-            label="⬇️ Download Result as CSV",
-            data=csv,
-            file_name=f"ageing_result_{datetime.today().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            )
+            label="⬇️ Download Result as Excel",
+            data=excel_bytes,
+            file_name=f"ageing_result_{datetime.today().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
         st.dataframe(result_display, use_container_width=True)
+
