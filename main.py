@@ -145,7 +145,7 @@ def calculate_ageing(data: pd.DataFrame,
         # 1. Process specific requested custom pairs
         for start_col, end_col in custom_pairs:
             if start_col in data.columns and end_col in data.columns:
-                col_name = f"age_betn_{start_col}_and_{end_col}"
+                col_name = f"{start_col}_&_{end_col}"
                 data[col_name] = (data[end_col] - data[start_col]).dt.days.abs()
             else:
                 missing = [c for c in (start_col, end_col) if c not in data.columns]
@@ -153,7 +153,7 @@ def calculate_ageing(data: pd.DataFrame,
 
         # 2. Backwards compatibility custom (user-selected execution argument)
         if from_status in data.columns and to_status in data.columns:
-            data[f"age_betn_{from_status}_and_{to_status}"] = (
+            data[f"{from_status}_&_{to_status}"] = (
                 data[to_status] - data[from_status]
             ).dt.days.abs()
         else:
@@ -173,5 +173,4 @@ def func1(open_call_data: pd.DataFrame,
           to_status: str = "complete_date") -> pd.DataFrame:
 
     data = prepare_data(open_call_data, completed_call_data)
-    # data = calculate_ageing(data, from_status=from_status, to_status=to_status)
     return data
